@@ -1,0 +1,16 @@
+# Runs on push to main branch
+# Set variables in Bitbucket: Repository settings → Pipelines → Repository variables
+# (mark CONTENTSTACK_CLIENT_SECRET as "Secured")
+
+image: node:22
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Deploy to Contentstack Launch
+          caches:
+            - node
+          script:
+            - npm install archiver@^7 form-data dotenv
+            - node deploy-api.js
