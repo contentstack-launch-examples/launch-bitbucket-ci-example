@@ -8,17 +8,12 @@
     "prebuild": "npm install",
     "start": "next start",
     "lint": "next lint",
-    "deploy": "node deploy-api.js"
+    "deploy": "bash deploy.sh"
   },
   "dependencies": {
     "next": "^15.4.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
-  },
-  "devDependencies": {
-    "archiver": "^7.0.1",
-    "dotenv": "^16.4.5",
-    "form-data": "^4.0.0"
   },
   "engines": {
     "node": ">=18.0.0",

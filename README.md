@@ -1,36 +1,37 @@
-# Redeploy to Contentstack Launch with Bitbucket Pipelines using Launch API
+# Redeploy to Contentstack Launch with Bitbucket Pipelines using the Launch CLI
 
-This repository demonstrates how to redeploy a Next.js application to **Contentstack Launch** using the [Launch Public API](https://www.contentstack.com/docs/developers/apis/launch-api) file upload with **Bitbucket Pipelines**. After the first deployment is done from the **Launch UI** or **Launch APIs**, the pipeline (`bitbucket-pipelines.yml`) runs on every push to `main` and redeploys the project using the script `deploy-api.js`.
+This repository demonstrates how to redeploy a Next.js application to **Contentstack Launch** using the **Contentstack CLI** (`csdx` with the `@contentstack/cli-launch` plugin) and **Bitbucket Pipelines**. After the first deployment is done from the **Launch UI** or **Launch APIs**, the pipeline (`bitbucket-pipelines.yml`) runs on every push to `main` and redeploys the project using the script `deploy.sh`.
 
 ---
 
 ## Prerequisites
 
-The Launch API supports [**M2M**, **OAuth**, or **Authtoken**](https://www.contentstack.com/docs/developers/apis/launch-api#authentication). This example uses **M2M** (Client ID and Client Secret).
+The CLI logs in with a Contentstack username and password (optionally with MFA), not with an M2M/OAuth token.
 
 | Variable | Description |
 |----------|-------------|
-| `CONTENTSTACK_CLIENT_ID` | M2M or OAuth application ID |
-| `CONTENTSTACK_CLIENT_SECRET` | M2M or OAuth application secret |
-| `CONTENTSTACK_REGION` | Region: <small>`AWS_NA`, `AWS_EU`, `AWS_AU`, `AZURE_NA`, `AZURE_EU`, `GCP_NA`, `GCP_EU`</small> |
+| `CONTENTSTACK_REGION` | Region: <small>`AWS-NA`, `AWS-EU`, `AWS-AU`, `AZURE-NA`, `AZURE-EU`, `GCP-NA`, `GCP-EU`</small> |
+| `CS_USERNAME` | Contentstack account email used to log in via the CLI |
+| `CS_PASSWORD` | Password for that account |
+| `CONTENTSTACK_MFA_SECRET` | Optional. Base32 TOTP secret — only needed if the account has MFA enabled |
 | `PROJECT_UID` | Launch project UID |
 | `ENVIRONMENT_UID` | Launch environment UID |
+| `ORGANIZATION_UID` | Organization UID that owns the project |
 
 ## Deployment flow
 
 1. **First deployment:** Perform the initial deployment from the **Launch UI** or **Launch APIs**. Create the project and deploy once.
-2. **Subsequent deployments:** Every push to `main` redeploys the project automatically through this Bitbucket Pipelines pipeline.
+2. **Subsequent deployments:** Every push to `main` runs `deploy.sh`, which installs the CLI, logs in, tells the CLI this is an existing project, and redeploys it. This happens automatically through this Bitbucket Pipelines pipeline.
 
 ## Quick start
 
 1. Perform the first deployment from the **Launch UI** or **Launch APIs**.
-2. Create an application with `launch:manage` or `launch.projects:write` scope (M2M is used in this example; OAuth and Authtoken are also supported by the API).
-3. Clone or copy this repository and push the code to a Bitbucket repository.
-4. Enable Pipelines: **Repository settings → Pipelines → Settings → Enable Pipelines**.
-5. Add all required variables to Bitbucket repository variables or to `.env` for local runs.
-6. Push to `main` to trigger a redeploy, or run `npm run deploy` locally.
+2. Clone or copy this repository and push the code to a Bitbucket repository.
+3. Enable Pipelines: **Repository settings → Pipelines → Settings → Enable Pipelines**.
+4. Add all required variables to Bitbucket repository variables or to `.env` for local runs.
+5. Push to `main` to trigger a redeploy, or run `npm run deploy` locally.
 
-**Running locally:** Copy `.env.example` to `.env`, enter your values, then run `npm run deploy`.
+**Running locally:** Copy `.env.example` to `.env`, enter your values, then run `npm run deploy` (or `bash deploy.sh`).
 
 ## Pushing to Bitbucket
 
@@ -54,52 +55,39 @@ Add the **public** key at **Personal settings → SSH keys**, signed in as the a
 
 ## Bitbucket Pipelines
 
-**Pipeline:** The file `bitbucket-pipelines.yml` runs on push to `main`: it checks out the code, runs `npm install form-data archiver dotenv`, then runs `node deploy-api.js`.
+**Pipeline:** The file `bitbucket-pipelines.yml` runs on push to `main`, on a `node:24` image, and simply runs `bash ./deploy.sh`. `deploy.sh` installs the Contentstack CLI and the `@contentstack/cli-launch` plugin fresh on every run, so the pipeline caches both `node` and the global npm modules directory (`npmglobal`) to speed that up.
 
-**Required variables** (Repository settings → Pipelines → Repository variables): `CONTENTSTACK_CLIENT_ID`, `CONTENTSTACK_CLIENT_SECRET`, `CONTENTSTACK_REGION`, `PROJECT_UID`, `ENVIRONMENT_UID`.
+**Required variables** (Repository settings → Pipelines → Repository variables): `CONTENTSTACK_REGION`, `CS_USERNAME`, `CS_PASSWORD`, `PROJECT_UID`, `ENVIRONMENT_UID`, `ORGANIZATION_UID`. Add `CONTENTSTACK_MFA_SECRET` too if the account has MFA enabled.
 
-Mark `CONTENTSTACK_CLIENT_SECRET` as **Secured** so its value is masked in the build logs.
+Mark `CS_PASSWORD` and `CONTENTSTACK_MFA_SECRET` as **Secured** so their values are masked in the build logs.
 
 Two things to know when setting this up:
 
 - Pipelines is **off by default**, and while it is off there is no **Pipelines** tab and no repository-variables screen. Enable it first, then add the variables.
 - Enabling Pipelines does not build commits that are already pushed. Start the first run from **Pipelines → Run pipeline**, or with `git commit --allow-empty -m "Trigger pipeline" && git push`.
 
-> Bitbucket also supports **deployment variables** (Repository settings → Pipelines → Deployments) if you want per-environment values. To use them, add a `deployment:` key to the step in `bitbucket-pipelines.yml`, for example `deployment: production`.
+> The pipeline step in `bitbucket-pipelines.yml` already declares `deployment: production`, which is what makes **Deployments** (Repository settings → Pipelines → Deployments) available if you want per-environment variables instead of plain repository variables.
 
 ---
 
+## What `deploy.sh` does
+
+1. **Config:** loads `.env` when run locally (a no-op in CI, where variables come from Bitbucket instead), and checks that all required variables are set.
+2. **Isolated credential store:** points the CLI's config at a directory outside the repo (`CS_CLI_CONFIG_PATH`, default `/tmp/csdx-ci`) so a live session token never ends up inside the project that gets zipped and uploaded. It's removed again on exit, along with the CLI session, `.cs-launch.json`, and the deployment zip the CLI creates.
+3. **CLI install:** installs `@contentstack/cli` and the `@contentstack/cli-launch` plugin (opt-in, not bundled with the CLI).
+4. **Region:** runs `csdx config:set:region` for the given `CONTENTSTACK_REGION`. This must happen before login, since setting the region logs the CLI out.
+5. **Login:** runs `csdx auth:login` with `CS_USERNAME` / `CS_PASSWORD`, deriving a TOTP code from `CONTENTSTACK_MFA_SECRET` if it's set.
+6. **Existing project:** writes a `.cs-launch.json` describing the project, organization, and environment, with an empty `deployments` array (required by the CLI, since it appends to that array).
+7. **Deploy:** runs `csdx launch --data-dir "$PWD" --type FileUpload --environment "$ENVIRONMENT_UID" --redeploy-latest`, which zips the project, uploads it, and creates the deployment with no prompts, streaming logs until it succeeds or fails.
+
 ## What is included in the deployment zip
 
-The deploy script (`deploy-api.js`) adds the **whole project** to the zip, except the entries listed in the two exclude arrays near the top of the file. Nothing has to be listed for a file to be deployed, so adding a folder such as `src`, `components` or `lib` to your project needs no change to the script.
-
-**`EXCLUDE_ANYWHERE`** — skipped at every level of the project:
-
-| Entry | Reason |
-|-------|--------|
-| `node_modules` | Launch installs dependencies from `package.json`. Uploading them wastes transfer, and platform-specific binaries built locally can fail on the build machine. |
-| `.git` | Repository history is not needed to build the project. |
-| `.next`, `dist`, `build`, `out` | Local build output, which Launch regenerates. |
-| `.DS_Store` | Operating-system noise. |
-
-**`EXCLUDE_AT_ROOT`** — skipped only at the project root, since the same names deeper in the tree are likely application code:
-
-| Entry | Reason |
-|-------|--------|
-| `deploy-api.js` | The deploy script itself, not part of the application. |
-| `bitbucket-pipelines.yml` | Read by Bitbucket, not by Launch. |
-| `deployment.zip` | The archive being written, which must not contain itself. |
-| `.gitignore` | Git configuration, unrelated to the build. |
-
-Any name beginning with `.env` is excluded as well, so credentials are never uploaded. `.env.example` is kept, since it holds only placeholders.
-
-**To customize:** Edit those arrays in `deploy-api.js` to exclude anything else that should not be deployed, for example a `tests` or `docs` folder.
+The zip is built by the CLI itself (`csdx launch`), not by a script in this repo, so the exclude list can't be customized here. The CLI always excludes: `logs`, `.next`, `node_modules`, `.cs-launch.json`, `.git`, `.env`, `.env.local`, `.vscode`. Launch installs dependencies and builds the project itself, so no local build or `node_modules` upload is needed.
 
 ---
 
 ## References
 
-- [Launch API – Authentication](https://www.contentstack.com/docs/developers/apis/launch-api#authentication)
-- [Contentstack OAuth](https://www.contentstack.com/docs/developers/developer-hub/contentstack-oauth)
-- [Contentstack Launch API](https://www.contentstack.com/docs/developers/apis/launch-api)
+- [Contentstack CLI](https://www.contentstack.com/docs/developers/cli)
+- [Contentstack Launch](https://www.contentstack.com/docs/developers/launch)
 - [Bitbucket Pipelines – Variables and secrets](https://support.atlassian.com/bitbucket-cloud/docs/variables-and-secrets/)
